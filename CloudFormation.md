@@ -187,6 +187,7 @@ tail -f /var/log/cloud-init-output.log
   - DBPassword
   - DBUser
 1. Add Resources
+
 ```yaml
   DBEC2SecurityGroup:
     Type: AWS::EC2::SecurityGroup
@@ -224,6 +225,7 @@ tail -f /var/log/cloud-init-output.log
       DBSubnetGroupName: !Ref DBSubnetGroup
       StorageEncrypted: false
 ```
+
 1. Add Environment Variables to User Data
 ```bash
 export DB_HOST=${DBInstance.Endpoint.Address}
