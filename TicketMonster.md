@@ -28,7 +28,6 @@ sudo yum install java-11-amazon-corretto -y
 Install PostgreSQL using yum:
 ```bash
 sudo yum install postgresql postgresql-server 
-sudo service postgresql start
 
 ```
 
@@ -130,6 +129,8 @@ Set password for admin user (still under wildfly-18.0.0.Final/bin/):
 ```
 
 Enter:
+- a
+- admin
 - a
 - admin
 - yes

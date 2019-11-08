@@ -187,7 +187,6 @@ tail -f /var/log/cloud-init-output.log
   - DBPassword
   - DBUser
 1. Add Resources
-
 ```yaml
   DBEC2SecurityGroup:
     Type: AWS::EC2::SecurityGroup
@@ -225,7 +224,6 @@ tail -f /var/log/cloud-init-output.log
       DBSubnetGroupName: !Ref DBSubnetGroup
       StorageEncrypted: false
 ```
-
 1. Add Environment Variables to User Data
 ```bash
 export DB_HOST=${DBInstance.Endpoint.Address}
@@ -249,3 +247,207 @@ tail -f /var/log/cloud-init-output.log
 ### Tasks
 1. Adjust the CloudFormation template to use a generated Password from the Custom Resource Example
 1. Replace the DBPassword Parameter by the Custom Resource
+
+# Final Template
+```yaml
+AWSTemplateFormatVersion: 2010-09-09
+
+Parameters:
+  VpcId:
+    Type: AWS::EC2::VPC::Id
+  SubnetIdA:
+    Type: AWS::EC2::Subnet::Id
+  SubnetIdB:
+    Type: AWS::EC2::Subnet::Id
+  KeyPairName:
+    Type: AWS::EC2::KeyPair::KeyName
+  DBUser:
+    Type: String
+  DeploymentType:
+    Type: String
+    AllowedValues:
+      - Dev
+      - Prod
+    Default: Dev
+
+Mappings: 
+  RegionMap: 
+    eu-central-1: 
+      AMI: "ami-00aa4671cbf840d82"
+    eu-west-1: 
+      AMI: "ami-0ce71448843cb18a1"
+    us-east-1: 
+      AMI: "ami-00c03f7f7f2ec15c3"
+    us-east-2: 
+      AMI: "ami-00c03f7f7f2ec15c3"
+
+Conditions:
+  DeployProdCondition: !Equals  [ !Ref DeploymentType, Prod]
+
+Resources:
+
+  PWGLambdaExecutionRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+        - Effect: Allow
+          Principal:
+            Service:
+            - lambda.amazonaws.com
+          Action:
+          - sts:AssumeRole
+      Policies:
+        -
+          PolicyName: allowLambdaLogging
+          PolicyDocument:
+            Version: "2012-10-17"
+            Statement:
+              -
+                Effect: "Allow"
+                Action:
+                  - "logs:*"
+                Resource: "*"
+
+  PWGRandomStringLambdaFunction:
+   Type: AWS::Lambda::Function
+   Properties:
+      Code:
+        ZipFile: >
+          const response = require("cfn-response");
+          const randomString = (length, chars) => {
+              var result = '';
+              for (var i = length; i > 0; --i) result += chars[Math.floor(Math.random() * chars.length)];
+              return result;
+          };
+          exports.handler = (event, context) =>{
+            const str = randomString(event['ResourceProperties']['Length'], '0123456789abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ');
+            const responseData = {RandomString: str};
+            response.send(event, context, response.SUCCESS, responseData);
+          };
+      Handler: index.handler
+      Runtime: nodejs8.10
+      Role: !GetAtt PWGLambdaExecutionRole.Arn
+      MemorySize: 128
+      Timeout: 20
+
+  DBPassword:
+   Type: AWS::CloudFormation::CustomResource
+   Properties:
+     Length: 16
+     ServiceToken: !GetAtt PWGRandomStringLambdaFunction.Arn
+
+  InstanceSecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupDescription: Open database for access
+      VpcId: !Ref VpcId
+      SecurityGroupIngress:
+        - FromPort: 22
+          IpProtocol: tcp
+          ToPort: 22
+          CidrIp: 0.0.0.0/0
+        - FromPort: 8080
+          IpProtocol: tcp
+          ToPort: 8080
+          CidrIp: 0.0.0.0/0
+        - FromPort: 9990
+          IpProtocol: tcp
+          ToPort: 9990
+          CidrIp: 0.0.0.0/0
+
+  Ec2Instance: 
+    Type: AWS::EC2::Instance
+    DependsOn: DBInstance
+    Properties: 
+      ImageId: !FindInMap [RegionMap, !Ref 'AWS::Region', AMI]
+      InstanceType: !If [DeployProdCondition, t2.large, t2.medium] 
+      KeyName: !Ref KeyPairName
+      NetworkInterfaces: 
+        - AssociatePublicIpAddress: true
+          DeviceIndex: "0"
+          GroupSet: 
+            - !Ref InstanceSecurityGroup
+          SubnetId: !Ref SubnetIdA
+      Tags:
+       - Key: Name
+         Value: CF-Instance 
+      UserData:
+        'Fn::Base64': !Sub |
+          #!/bin/bash
+          export DB_HOST=${DBInstance.Endpoint.Address}
+          export DB_PORT=${DBInstance.Endpoint.Port}
+          export DB_NAME=postgres
+          export DB_USERNAME=${DBUser}
+          export DB_PASSWORD=${DBPassword.RandomString}
+          echo ${AWS::Region}
+          echo ${AWS::StackName}
+          sudo yum update -y
+          sudo yum upgrade -y
+          sudo yum autoremove -y
+          sudo yum install java-11-amazon-corretto -y
+          cd ~
+          wget https://download.jboss.org/wildfly/18.0.0.Final/wildfly-18.0.0.Final.tar.gz
+          tar xzf wildfly-18.0.0.Final.tar.gz
+          sed 's/jboss.bind.address.management:127.0.0.1/jboss.bind.address.management:0.0.0.0/g' wildfly-18.0.0.Final/standalone/configuration/standalone.xml > wildfly-18.0.0.Final/standalone/configuration/tmp_standalone.xml
+          sed 's/jboss.bind.address:127.0.0.1/jboss.bind.address:0.0.0.0/g' wildfly-18.0.0.Final/standalone/configuration/tmp_standalone.xml >  wildfly-18.0.0.Final/standalone/configuration/standalone.xml
+          mkdir dockerize
+          cd dockerize
+          wget https://materialien.s3.eu-central-1.amazonaws.com/workshop/cloudinit/commands.cli
+          wget https://materialien.s3.eu-central-1.amazonaws.com/workshop/cloudinit/postgresql-9.4-1202.jdbc41.jar
+          wget https://materialien.s3.eu-central-1.amazonaws.com/workshop/cloudinit/customize.sh
+          mkdir -p /opt/tmp/
+          mv postgresql-9.4-1202.jdbc41.jar /opt/tmp/postgresql-9.4-1202.jdbc41.jar
+          chmod +x customize.sh
+          ./customize.sh
+          cd ~/wildfly-18.0.0.Final/standalone/deployments/
+          wget https://materialien.s3.eu-central-1.amazonaws.com/workshop/cloudinit/ticket-monster.war
+          touch ticket-monster.war.dodeploy 
+          cd ~/wildfly-18.0.0.Final/bin/
+          nohup ./standalone.sh &
+
+  DBEC2SecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupDescription: Open database for access
+      VpcId: !Ref VpcId
+      SecurityGroupIngress:
+        - FromPort: 5432
+          IpProtocol: tcp
+          ToPort: 5432
+          SourceSecurityGroupId: !Ref InstanceSecurityGroup
+
+  DBSubnetGroup:
+    Type: AWS::RDS::DBSubnetGroup
+    Properties:
+      DBSubnetGroupDescription: subnet group
+      SubnetIds:
+        - !Ref SubnetIdA
+        - !Ref SubnetIdB
+
+  DBInstance:
+    Type: AWS::RDS::DBInstance
+    Properties:
+      DBName: ticketmonster
+      Engine: postgres
+      EngineVersion: 9.6.8
+      Port: "5432"
+      MultiAZ: false
+      MasterUsername: !Ref DBUser
+      DBInstanceClass: db.t2.micro
+      AllocatedStorage: 20
+      MasterUserPassword: !GetAtt DBPassword.RandomString
+      VPCSecurityGroups:
+        - !GetAtt DBEC2SecurityGroup.GroupId
+      DBSubnetGroupName: !Ref DBSubnetGroup
+      StorageEncrypted: false
+
+Outputs:
+  Ec2InstanceId:
+    Value: !Ref Ec2Instance
+  Ec2InstanceIp:
+    Value: !GetAtt Ec2Instance.PublicIp
+  DBPassword:
+    Value: !GetAtt DBPassword.RandomString
+```

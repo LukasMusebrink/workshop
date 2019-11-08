@@ -37,7 +37,6 @@ Every Lambda function has an IAM role associated with it. This role defines what
     ![](img/sls_07.JPG)
 1. Hit **Create function**
 1. Scroll down to the Function code section and replace the exiting code in the index.js code editor with the contents of
-
 ```js
 const randomBytes = require('crypto').randomBytes;
 const AWS = require('aws-sdk');
@@ -74,14 +73,12 @@ function toUrlString(buffer) {
         .replace(/=/g, '');
 }
 ```
-
 1. Click save
 
 ### Test
 1. Click **Configure test event** from the the **Select a test event...** dropdown.
 1. Enter **RequestTest** in the Event name field
 1. Copy and paste the following test event into the editor:
-
 ```json
 {
     "path": "/event",
@@ -96,7 +93,6 @@ function toUrlString(buffer) {
     "body": "{\"eventName\":\"MyEvent\"}"
 }
 ```
-
 1. Execute the test
 1. Review outcome and items in DynamoDB
 
